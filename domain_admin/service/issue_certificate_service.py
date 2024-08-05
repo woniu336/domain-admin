@@ -25,7 +25,8 @@ from domain_admin.utils.acme_util.directory_type_enum import DirectoryTypeEnum
 from domain_admin.utils.acme_util.key_type_enum import KeyTypeEnum
 from domain_admin.utils.cert_util import cert_common
 from domain_admin.utils.flask_ext.app_exception import AppException
-from domain_admin.utils.open_api import aliyun_domain_api, tencentcloud_domain_api
+from domain_admin.utils.open_api import aliyun_domain_api, tencentcloud_domain_api, aliyun_oss_api, aliyun_cdn_api, \
+    aliyun_dcdn_api
 from domain_admin.utils.open_api.aliyun_domain_api import RecordTypeEnum
 from domain_admin import config
 
@@ -46,7 +47,7 @@ def issue_certificate(
     # Issue certificate
 
     # Create domain private key and CSR
-    pkey_pem, csr_pem = acme_v2_api.new_csr_comp(domains=domains, key_type=key_type)
+    pkey_pem, csr_pem = acme_v2_api.new_csr_comp(domains=domains)
 
     issue_certificate_row = IssueCertificateModel.create(
         user_id=user_id,
@@ -75,10 +76,13 @@ def get_certificate_challenges(issue_certificate_id):
     pkey_pem, csr_pem = acme_v2_api.new_csr_comp(
         domains=domains,
         pkey_pem=pkey_pem,
+    )
+    print('directory_type', issue_certificate_row.directory_type)
+
+    acme_client = acme_v2_api.get_acme_client(
+        directory_type=issue_certificate_row.directory_type,
         key_type=issue_certificate_row.key_type
     )
-
-    acme_client = acme_v2_api.get_acme_client(directory_type=issue_certificate_row.directory_type)
     orderr = acme_client.new_order(csr_pem)
 
     # Select HTTP-01 within offered challenges by the CA server
@@ -112,7 +116,10 @@ def verify_certificate(issue_certificate_id, challenge_type):
     issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
 
     items = get_certificate_challenges(issue_certificate_id)
-    acme_client = acme_v2_api.get_acme_client(directory_type=issue_certificate_row.directory_type)
+    acme_client = acme_v2_api.get_acme_client(
+        directory_type=issue_certificate_row.directory_type,
+        key_type=issue_certificate_row.key_type
+    )
 
     verify_count = 0
     for item in items:
@@ -175,13 +182,15 @@ def renew_certificate(row_id):
     pkey_pem = issue_certificate_row.ssl_certificate_key
     domains = issue_certificate_row.domains
 
-    acme_client = acme_v2_api.get_acme_client(directory_type=issue_certificate_row.directory_type)
+    acme_client = acme_v2_api.get_acme_client(
+        directory_type=issue_certificate_row.directory_type,
+        key_type=issue_certificate_row.key_type
+    )
 
     # Create domain private key and CSR
     pkey_pem, csr_pem = acme_v2_api.new_csr_comp(
         domains=domains,
         pkey_pem=pkey_pem,
-        key_type=issue_certificate_row.key_type
     )
 
     orderr = acme_client.new_order(csr_pem)
@@ -268,7 +277,6 @@ def renew_certificate_row(row):
     # 重新申请
     pkey_pem, csr_pem = acme_v2_api.new_csr_comp(
         domains=row.domains,
-        key_type=row.key_type
     )
 
     IssueCertificateModel.update(
@@ -330,6 +338,23 @@ def renew_certificate_row(row):
             issue_certificate_id=row.id,
             url=row.deploy_url,
             headers=row.deploy_header,
+        )
+
+    elif row.deploy_type_id == SSLDeployTypeEnum.OSS:
+        deploy_cert_to_oss(
+            issue_certificate_id=row.id,
+            dns_id=row.deploy_host_id
+        )
+
+    elif row.deploy_type_id == SSLDeployTypeEnum.CDN:
+        deploy_cert_to_cdn(
+            issue_certificate_id=row.id,
+            dns_id=row.deploy_host_id
+        )
+    elif row.deploy_type_id == SSLDeployTypeEnum.DCDN:
+        deploy_cert_to_dcdn(
+            issue_certificate_id=row.id,
+            dns_id=row.deploy_host_id
         )
 
 
@@ -547,6 +572,92 @@ def deploy_ssl_by_web_hook(issue_certificate_id, url, headers):
         raise res.raise_for_status()
 
     return res.text
+
+
+def deploy_cert_to_oss(issue_certificate_id, dns_id):
+    """
+    部署ssl证书到oss
+    """
+    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+
+    if not issue_certificate_row:
+        raise AppException('证书数据不存在')
+
+    dns_row = DnsModel.get_by_id(dns_id)
+    if not dns_row:
+        raise AppException('DNS数据不存在')
+
+    domain = issue_certificate_row.domains[0]
+
+    oss_info = aliyun_oss_api.cname_to_oss_info(domain)
+    if not oss_info:
+        raise AppException('dns 未设置')
+
+    logger.info("oss_info: %s", oss_info)
+
+    aliyun_oss_api.put_bucket_cname(
+        access_key_id=dns_row.access_key,
+        access_key_secret=dns_row.secret_key,
+        bucket_name=oss_info['bucket_name'],
+        domain=domain,
+        certificate=issue_certificate_row.ssl_certificate,
+        private_key=issue_certificate_row.ssl_certificate_key,
+        endpoint=oss_info['endpoint'],
+    )
+
+
+def deploy_cert_to_cdn(issue_certificate_id, dns_id):
+    """
+    部署ssl证书到cdn
+    """
+    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+
+    if not issue_certificate_row:
+        raise AppException('证书数据不存在')
+
+    dns_row = DnsModel.get_by_id(dns_id)
+    if not dns_row:
+        raise AppException('DNS数据不存在')
+
+    domain = issue_certificate_row.domains[0]
+
+    # oss_info = aliyun_oss_api.cname_to_oss_info(domain)
+    # if not oss_info:
+    #     raise AppException('dns 未设置')
+    #
+    # logger.info("oss_info: %s", oss_info)
+
+    aliyun_cdn_api.set_cdn_domain_ssl_certificate_v2(
+        access_key_id=dns_row.access_key,
+        access_key_secret=dns_row.secret_key,
+        domain_name=domain,
+        certificate=issue_certificate_row.ssl_certificate,
+        private_key=issue_certificate_row.ssl_certificate_key,
+    )
+
+
+def deploy_cert_to_dcdn(issue_certificate_id, dns_id):
+    """
+    部署ssl证书到dcdn
+    """
+    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+
+    if not issue_certificate_row:
+        raise AppException('证书数据不存在')
+
+    dns_row = DnsModel.get_by_id(dns_id)
+    if not dns_row:
+        raise AppException('DNS数据不存在')
+
+    domain = issue_certificate_row.domains[0]
+
+    aliyun_dcdn_api.set_dcdn_domain_ssl_certificate(
+        access_key_id=dns_row.access_key,
+        access_key_secret=dns_row.secret_key,
+        domain_name=domain,
+        certificate=issue_certificate_row.ssl_certificate,
+        private_key=issue_certificate_row.ssl_certificate_key,
+    )
 
 
 def check_auto_renew(issue_certificate_id):

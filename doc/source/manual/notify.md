@@ -8,6 +8,9 @@
 
 > 如果需要对域名进行到期监控和邮件提醒，必须设置发件邮件
 
+注意：
+1. 如果使用的是163邮箱，密码处填写的是`授权码` 
+
 ![](https://raw.githubusercontent.com/mouday/domain-admin/master/image/system-list.png)
 
 第二步：填写收件人列表
@@ -203,6 +206,68 @@ https://push.showdoc.com.cn/server/api/push/<API Key>
     }
 }
 ```
+
+### 2.6、webhook发送企业微信消息
+
+文档：[https://developer.work.weixin.qq.com/document/path/99110](https://developer.work.weixin.qq.com/document/path/99110)
+
+webhook地址
+
+```
+https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=693a91f6-7xxx-4bc4-97a0-0ec2sifa5aaa
+```
+
+消息体
+```json
+{
+    "msgtype": "text",
+    "text": {
+        "content": "广州今日天气：29度，大部分多云，降雨概率：60%",
+		"mentioned_list":["wangqing","@all"],
+		"mentioned_mobile_list":["13800001111","@all"]
+    }
+}
+```
+
+示例：监控证书到期（文本格式）
+
+```json
+{
+    "msgtype": "text",
+    "text": {
+        "content": "SSL证书到期提醒：{% for row in list %}{{row.domain}} {{row.start_date or '-' }} - {{row.expire_date or '-' }} ({{row.expire_days}}){% endfor %}"
+    }
+}
+```
+
+示例：监控证书到期（markdown格式）
+
+```json
+{
+  "msgtype": "markdown",
+  "markdown": {
+    "title": "SSL证书到期提醒",
+    "content": "### SSL证书到期提醒 🔔\n\n| 域名 | 生效日期 | 到期日期 | 剩余天数 |\n| ---- | -------- | -------- | :--------: |\n{% for row in list %}| {{row.domain}} | {{row.start_date or '未知'}} | {{row.expire_date or '未知'}} | {{row.expire_days}}天 |\n{% endfor %}\n\n> 请及时更新即将到期的SSL证书，以确保网站安全性。"
+  }
+}
+```
+
+示例：网站监控
+
+```json
+{
+    "msgtype": "markdown",
+    "markdown": {
+        "content": "{{monitor_row.title}}监测提醒，请相关同事注意。\n
+         >请求URL:<font color=\"red\">{{monitor_row.http_url}}</font>
+         >重试次数:<font color=\"red\">{{monitor_row.allow_error_count}}</font>
+         >状态:{% if monitor_row.status==2 %}<font color=\"red\">失败</font>{% elif monitor_row.status==1 %}<font color=\"green\">成功</font>{% else %}<font color=\"comment\">未知</font>{% endif %}"
+    }
+}
+```
+
+
+
 ## 3、企业微信
 
 ```json

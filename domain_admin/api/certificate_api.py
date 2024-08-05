@@ -6,11 +6,13 @@
 from flask import g, request
 from peewee import SQL
 
+from domain_admin.enums.role_enum import RoleEnum
 from domain_admin.model.certificate_model import CertificateModel
-from domain_admin.service import certificate_service
-from domain_admin.utils.flask_ext.app_exception import AppException, DataNotFoundAppException
+from domain_admin.service import certificate_service, auth_service
+from domain_admin.utils.flask_ext.app_exception import AppException, DataNotFoundAppException, ForbiddenAppException
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_certificate_list():
     """
     获取列表
@@ -25,6 +27,9 @@ def get_certificate_list():
     keyword = request.json.get('keyword')
     order_prop = request.json.get('order_prop') or 'create_time'
     order_type = request.json.get('order_type') or 'desc'
+
+    if order_prop not in ['create_time']:
+        raise AppException('params error: order_prop')
 
     if order_type not in ['desc', 'asc']:
         raise AppException('params error: order_type')
@@ -58,6 +63,7 @@ def get_certificate_list():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def add_certificate():
     """
     添加
@@ -87,6 +93,7 @@ def add_certificate():
     CertificateModel.create(**data)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_certificate_by_id():
     """
     更新主机地址
@@ -105,6 +112,15 @@ def update_certificate_by_id():
     expire_time = request.json.get('expire_time')
     comment = request.json.get('comment') or ''
 
+    # check data
+    certificate_row = CertificateModel.select().where(
+        CertificateModel.id == certificate_id,
+        CertificateModel.user_id == current_user_id
+    ).first()
+
+    if not certificate_row:
+        raise DataNotFoundAppException()
+
     data = {
         'domain': domain,
         'start_time': start_time,
@@ -119,6 +135,7 @@ def update_certificate_by_id():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_certificate_by_id():
     """
     删除
@@ -130,11 +147,22 @@ def delete_certificate_by_id():
 
     certificate_id = request.json['certificate_id']
 
+    # check data
+    certificate_row = CertificateModel.select().where(
+        CertificateModel.id == certificate_id,
+        CertificateModel.user_id == current_user_id
+    ).first()
+
+    if not certificate_row:
+        raise DataNotFoundAppException()
+
+    # delete
     CertificateModel.delete().where(
-        CertificateModel.id == certificate_id
+        CertificateModel.id == certificate_row.id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_certificate_by_ids():
     """
     批量删除
@@ -147,10 +175,12 @@ def delete_certificate_by_ids():
     certificate_ids = request.json['certificate_ids']
 
     CertificateModel.delete().where(
-        CertificateModel.id.in_(certificate_ids)
+        CertificateModel.id.in_(certificate_ids),
+        CertificateModel.user_id == current_user_id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_certificate_by_id():
     """
     获取
@@ -161,7 +191,12 @@ def get_certificate_by_id():
     current_user_id = g.user_id
 
     certificate_id = request.json['certificate_id']
-    certificate_row = CertificateModel.get_by_id(certificate_id)
+
+    # check data
+    certificate_row = CertificateModel.select().where(
+        CertificateModel.id == certificate_id,
+        CertificateModel.user_id == current_user_id
+    ).first()
 
     if not certificate_row:
         raise DataNotFoundAppException()

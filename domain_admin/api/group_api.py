@@ -12,9 +12,11 @@ from domain_admin.model.domain_info_model import DomainInfoModel
 from domain_admin.model.domain_model import DomainModel
 from domain_admin.model.group_model import GroupModel
 from domain_admin.model.group_user_model import GroupUserModel
-from domain_admin.service import group_service, operation_service, group_user_service
+from domain_admin.service import group_service, operation_service, group_user_service, auth_service
+from domain_admin.utils.flask_ext.app_exception import ForbiddenAppException, DataNotFoundAppException
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=GroupModel,
     operation_type_id=OperationEnum.CREATE,
@@ -38,6 +40,7 @@ def add_group():
     return {'id': row.id}
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=GroupModel,
     operation_type_id=OperationEnum.UPDATE,
@@ -54,7 +57,15 @@ def update_group_by_id():
     group_id = request.json['id']
     name = request.json.get('name')
 
-    group_service.check_group_permission(group_id, current_user_id)
+    # group_service.check_group_permission(group_id, current_user_id)
+    # check data
+    group_row = GroupModel.select().where(
+        GroupModel.id == group_id,
+        GroupModel.user_id == current_user_id
+    ).first()
+
+    if not group_row:
+        raise DataNotFoundAppException()
 
     GroupModel.update(
         name=name,
@@ -63,6 +74,7 @@ def update_group_by_id():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=GroupModel,
     operation_type_id=OperationEnum.DELETE,
@@ -77,10 +89,16 @@ def delete_group_by_id():
 
     group_id = request.json['id']
 
-    GroupModel.delete().where(
+    # check data
+    group_row = GroupModel.select().where(
         GroupModel.id == group_id,
         GroupModel.user_id == current_user_id
-    ).execute()
+    ).first()
+
+    if not group_row:
+        raise DataNotFoundAppException()
+
+    GroupModel.delete_by_id(group_row.id)
 
     # 重置已分类的证书 和 域名
     DomainModel.update(
@@ -100,6 +118,7 @@ def delete_group_by_id():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=GroupModel,
     operation_type_id=OperationEnum.BATCH_DELETE,
@@ -137,6 +156,7 @@ def delete_group_by_ids():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_group_list():
     """
     获取域名列表
@@ -252,6 +272,7 @@ def get_group_list():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_group_by_id():
     """
     获取
@@ -261,6 +282,14 @@ def get_group_by_id():
 
     group_id = request.json['id']
 
-    group_service.check_group_permission(group_id, current_user_id)
+    # group_service.check_group_permission(group_id, current_user_id)
+    # check data
+    group_row = GroupModel.select().where(
+        GroupModel.id == group_id,
+        GroupModel.user_id == current_user_id
+    ).first()
 
-    return GroupModel.get_by_id(group_id)
+    if not group_row:
+        raise DataNotFoundAppException()
+
+    return group_row

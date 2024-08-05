@@ -17,14 +17,15 @@ from domain_admin.model.domain_info_model import DomainInfoModel
 from domain_admin.model.domain_model import DomainModel
 from domain_admin.model.group_model import GroupModel
 from domain_admin.model.group_user_model import GroupUserModel
-from domain_admin.service import async_task_service, domain_info_service, group_service, operation_service
+from domain_admin.service import async_task_service, domain_info_service, group_service, operation_service, auth_service
 from domain_admin.service import domain_service
 from domain_admin.service import file_service
 from domain_admin.utils import datetime_util, domain_util
 from domain_admin.utils.cert_util import cert_consts
-from domain_admin.utils.flask_ext.app_exception import AppException
+from domain_admin.utils.flask_ext.app_exception import AppException, DataNotFoundAppException
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=DomainModel,
     operation_type_id=OperationEnum.CREATE
@@ -89,6 +90,7 @@ def add_domain():
     return {'id': row.id}
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=DomainModel,
     operation_type_id=OperationEnum.UPDATE
@@ -109,7 +111,14 @@ def update_domain_by_id():
     data['update_time'] = datetime_util.get_datetime()
     data['group_id'] = data.get('group_id') or 0
 
-    before_domain_row = DomainModel.get_by_id(domain_id)
+    # data check
+    before_domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not before_domain_row:
+        raise DataNotFoundAppException()
 
     DomainModel.update(data).where(
         DomainModel.id == domain_id
@@ -127,6 +136,7 @@ def update_domain_by_id():
             domain_service.update_domain_row(after_domain_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_domain_expire_monitor_by_id():
     """
     更新监控状态
@@ -136,6 +146,15 @@ def update_domain_expire_monitor_by_id():
 
     domain_id = request.json.get('domain_id')
 
+    # data check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise DataNotFoundAppException()
+
     data = {
         "is_monitor": request.json.get('is_monitor', True)
     }
@@ -143,10 +162,11 @@ def update_domain_expire_monitor_by_id():
     DomainModel.update(
         data
     ).where(
-        DomainModel.id == domain_id
+        DomainModel.id == domain_row.id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=DomainModel,
     operation_type_id=OperationEnum.UPDATE,
@@ -171,11 +191,21 @@ def update_domain_field_by_id():
         field: value,
     }
 
+    # data check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise DataNotFoundAppException()
+
     DomainModel.update(data).where(
-        DomainModel.id == domain_id
+        DomainModel.id == domain_row.id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_domain_field_by_ids():
     """
     批量更新单个字段值
@@ -188,15 +218,20 @@ def update_domain_field_by_ids():
     field = request.json.get('field')
     value = request.json.get('value')
 
+    if field not in ['auto_update']:
+        raise AppException("not allow field")
+
     data = {
         field: value,
     }
 
     DomainModel.update(data).where(
-        DomainModel.id.in_(domain_ids)
+        DomainModel.id.in_(domain_ids),
+        DomainModel.user_id == current_user_id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=DomainModel,
     operation_type_id=OperationEnum.DELETE,
@@ -213,10 +248,16 @@ def delete_domain_by_id():
 
     # domain_service.check_permission_and_get_row(domain_id, current_user_id)
 
-    DomainModel.delete().where(
+    # data check
+    domain_row = DomainModel.select().where(
         DomainModel.id == domain_id,
-        DomainModel.user_id == current_user_id,
-    ).execute()
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise DataNotFoundAppException()
+
+    DomainModel.delete_by_id(domain_row.id)
 
     # 同时移除主机信息
     AddressModel.delete().where(
@@ -224,6 +265,7 @@ def delete_domain_by_id():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 @operation_service.operation_log_decorator(
     model=DomainModel,
     operation_type_id=OperationEnum.BATCH_DELETE,
@@ -250,6 +292,7 @@ def delete_domain_by_ids():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_domain_by_id():
     """
     获取
@@ -260,9 +303,19 @@ def get_domain_by_id():
     domain_id = request.json.get('domain_id') or request.json['id']
 
     # row = domain_service.check_permission_and_get_row(domain_id, current_user_id)
-    row = DomainModel.get_by_id(domain_id)
+    # row = DomainModel.get_by_id(domain_id)
+
+    # data check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise DataNotFoundAppException()
+
     row = model_to_dict(
-        model=row,
+        model=domain_row,
         extra_attrs=[
             'real_time_expire_days',
             'domain_url',
@@ -298,6 +351,7 @@ def get_domain_by_id():
     return row
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_all_domain_cert_info():
     """
     更新所有域名证书信息
@@ -307,6 +361,7 @@ def update_all_domain_cert_info():
     domain_service.update_all_domain_cert_info()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_all_domain_cert_info_of_user():
     """
     更新当前用户的所有域名信息
@@ -318,6 +373,7 @@ def update_all_domain_cert_info_of_user():
     # async_task_service.submit_task(fn=domain_service.update_all_domain_cert_info_of_user, user_id=current_user_id)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_domain_row_info_by_id():
     """
     更新域名关联的证书信息
@@ -330,11 +386,21 @@ def update_domain_row_info_by_id():
     domain_id = request.json.get('domain_id') or request.json['id']
 
     # row = domain_service.check_permission_and_get_row(domain_id, current_user_id)
-    row = DomainModel.get_by_id(domain_id)
+    # row = DomainModel.get_by_id(domain_id)
 
-    domain_service.update_domain_row(row)
+    # data check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise DataNotFoundAppException()
+
+    domain_service.update_domain_row(domain_row=domain_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_all_domain_list_of_user():
     """
     获取用户的所有域名数据
@@ -356,6 +422,7 @@ def get_all_domain_list_of_user():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def import_domain_from_file():
     """
     从文件导入域名
@@ -379,6 +446,7 @@ def import_domain_from_file():
     # async_task_service.submit_task(fn=domain_service.update_all_domain_cert_info_of_user, user_id=current_user_id)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def export_domain_file():
     """
     导出域名文件
@@ -438,6 +506,7 @@ def export_domain_file():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def domain_relation_group():
     """
     分组关联域名
@@ -451,10 +520,12 @@ def domain_relation_group():
     DomainModel.update(
         group_id=group_id
     ).where(
-        DomainModel.id.in_(domain_ids)
+        DomainModel.id.in_(domain_ids),
+        DomainModel.user_id == current_user_id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_domain_list():
     """
     获取域名列表
@@ -551,6 +622,7 @@ def get_domain_list():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_domain_group_filter():
     """
     获取证书分组筛选器

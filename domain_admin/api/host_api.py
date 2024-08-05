@@ -6,10 +6,14 @@
 from flask import request, g
 
 from domain_admin.config import DEFAULT_SSH_PORT
+from domain_admin.enums.role_enum import RoleEnum
 from domain_admin.log import logger
 from domain_admin.model.host_model import HostModel
+from domain_admin.service import auth_service
+from domain_admin.utils.flask_ext.app_exception import DataNotFoundAppException
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def add_host():
     """
     添加主机
@@ -37,6 +41,7 @@ def add_host():
     return row
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_host_by_id():
     """
     更新主机
@@ -52,6 +57,15 @@ def update_host_by_id():
     auth_type = request.json['auth_type']
     private_key = request.json['private_key']
 
+    # check data
+    host_row = HostModel.select().where(
+        HostModel.id == host_id,
+        HostModel.user_id == current_user_id
+    ).first()
+
+    if not host_row:
+        raise DataNotFoundAppException()
+
     HostModel.update(
         host=host,
         port=int(port),
@@ -60,30 +74,55 @@ def update_host_by_id():
         auth_type=auth_type,
         private_key=private_key,
     ).where(
-        HostModel.id == host_id
+        HostModel.id == host_row.id
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_host_by_id():
     """
     获取主机
     :return:
     """
+    current_user_id = g.user_id
+
     host_id = request.json['host_id']
 
-    return HostModel.get_by_id(host_id)
+    # check data
+    host_row = HostModel.select().where(
+        HostModel.id == host_id,
+        HostModel.user_id == current_user_id
+    ).first()
+
+    if not host_row:
+        raise DataNotFoundAppException()
+
+    return host_row
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_host_by_id():
     """
     移除主机
     :return:
     """
+    current_user_id = g.user_id
+
     host_id = request.json['host_id']
 
-    return HostModel.delete_by_id(host_id)
+    # check data
+    host_row = HostModel.select().where(
+        HostModel.id == host_id,
+        HostModel.user_id == current_user_id
+    ).first()
+
+    if not host_row:
+        raise DataNotFoundAppException()
+
+    return HostModel.delete_by_id(host_row.id)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_host_list():
     """
     主机列表

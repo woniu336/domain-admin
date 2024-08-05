@@ -9,21 +9,23 @@ import requests
 from flask import g, request
 from playhouse.shortcuts import model_to_dict, chunked
 
+from domain_admin.enums.role_enum import RoleEnum
 from domain_admin.model.dns_model import DnsModel
 from domain_admin.model.domain_model import DomainModel
 from domain_admin.model.host_model import HostModel
 from domain_admin.model.issue_certificate_model import IssueCertificateModel, ChallengeDeployTypeEnum, \
     SSLDeployTypeEnum, DeployStatusEnum
-from domain_admin.service import issue_certificate_service
+from domain_admin.service import issue_certificate_service, auth_service
 from domain_admin.utils import ip_util, domain_util, fabric_util, datetime_util, validate_util
 from domain_admin.utils.acme_util.challenge_type import ChallengeType
 from domain_admin.utils.acme_util.key_type_enum import KEY_TYPE_OPTIONS, KeyTypeEnum
 from domain_admin.utils.acme_util.directory_type_enum import DIRECTORY_URL_OPTIONS, DirectoryTypeEnum
-from domain_admin.utils.flask_ext.app_exception import AppException
+from domain_admin.utils.flask_ext.app_exception import AppException, DataNotFoundAppException
 from domain_admin.utils.open_api import aliyun_domain_api
 from domain_admin.utils.open_api.aliyun_domain_api import RecordTypeEnum
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def issue_certificate():
     """
     发起申请
@@ -47,6 +49,7 @@ def issue_certificate():
     return issue_certificate_row.to_dict()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def verify_certificate():
     """
     通知验证
@@ -57,12 +60,18 @@ def verify_certificate():
     issue_certificate_id = request.json['issue_certificate_id']
     challenge_type = request.json['challenge_type']
 
+    # 验证成功后，自动添加到证书监控列表
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
+
     issue_certificate_service.verify_certificate(issue_certificate_id, challenge_type)
 
     issue_certificate_service.renew_certificate(issue_certificate_id)
-
-    # 验证成功后，自动添加到证书监控列表
-    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
 
     # fix: 过滤通配符的域名
     lst = [
@@ -82,8 +91,20 @@ def verify_certificate():
         DomainModel.insert_many(batch).on_conflict_ignore().execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_certificate_challenges():
+    current_user_id = g.user_id
+
     issue_certificate_id = request.json['issue_certificate_id']
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     lst = issue_certificate_service.get_certificate_challenges(issue_certificate_id)
 
@@ -93,6 +114,7 @@ def get_certificate_challenges():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_domain_host():
     domain = request.json['domain']
     host = ip_util.get_domain_ip(domain)
@@ -103,6 +125,7 @@ def get_domain_host():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def deploy_verify_file():
     """
     部署验证文件
@@ -117,6 +140,15 @@ def deploy_verify_file():
 
     if not verify_deploy_path.endswith("/"):
         raise AppException("verify_deploy_path must endswith '/'")
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     # deploy
     issue_certificate_service.deploy_verify_file(
@@ -135,6 +167,7 @@ def deploy_verify_file():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def deploy_certificate_file():
     """
     ssh方式部署证书文件
@@ -149,17 +182,34 @@ def deploy_certificate_file():
     pem_deploy_path = request.json['pem_deploy_path']
     reload_cmd = request.json['reloadcmd']
 
-    host_row = HostModel.get_by_id(host_id)
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
+
+    # host_row = HostModel.get_by_id(host_id)
+    # data check
+    host_row = HostModel.select().where(
+        HostModel.id == host_id,
+        HostModel.user_id == current_user_id,
+    ).first()
+
+    if not host_row:
+        raise DataNotFoundAppException()
 
     host = host_row.host
     user = host_row.user
     password = host_row.password
 
-    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+    # issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
 
     if not issue_certificate_row.ssl_certificate:
         issue_certificate_service.renew_certificate(issue_certificate_id)
-        issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+        # issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
 
     # deploy key
 
@@ -197,6 +247,7 @@ def deploy_certificate_file():
     )
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def renew_certificate():
     """
     发起申请
@@ -205,6 +256,15 @@ def renew_certificate():
     current_user_id = g.user_id
 
     issue_certificate_id = request.json['issue_certificate_id']
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     issue_certificate_service.renew_certificate(issue_certificate_id)
 
@@ -216,6 +276,7 @@ def renew_certificate():
     return issue_certificate_row.to_dict()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_issue_certificate_list():
     """
     发起申请
@@ -264,6 +325,7 @@ def get_issue_certificate_list():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_issue_certificate_by_id():
     """
     获取
@@ -273,11 +335,20 @@ def get_issue_certificate_by_id():
 
     issue_certificate_id = request.json['issue_certificate_id']
 
-    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+    # check data
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     data = issue_certificate_row.to_dict()
     data['deploy_dns'] = None
     data['deploy_host'] = None
+    data['cert_deploy_host'] = None
+    data['cert_deploy_dns'] = None
 
     if issue_certificate_row.challenge_deploy_type_id == ChallengeDeployTypeEnum.SSH:
         data['deploy_host'] = HostModel.get_or_none(HostModel.id == issue_certificate_row.challenge_deploy_id)
@@ -285,9 +356,15 @@ def get_issue_certificate_by_id():
     elif issue_certificate_row.challenge_deploy_type_id == ChallengeDeployTypeEnum.DNS:
         data['deploy_dns'] = DnsModel.get_or_none(DnsModel.id == issue_certificate_row.challenge_deploy_id)
 
+    if issue_certificate_row.deploy_type_id == SSLDeployTypeEnum.SSH:
+        data['cert_deploy_host'] = HostModel.get_or_none(HostModel.id == issue_certificate_row.deploy_host_id)
+    elif issue_certificate_row.deploy_type_id in [SSLDeployTypeEnum.OSS, SSLDeployTypeEnum.CDN, SSLDeployTypeEnum.DCDN]:
+        data['cert_deploy_dns'] = DnsModel.get_or_none(DnsModel.id == issue_certificate_row.deploy_host_id)
+
     return data
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_issue_certificate_by_id():
     """
     获取
@@ -297,9 +374,19 @@ def delete_issue_certificate_by_id():
 
     issue_certificate_id = request.json['issue_certificate_id']
 
-    IssueCertificateModel.delete_by_id(issue_certificate_id)
+    # check data
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
+
+    IssueCertificateModel.delete_by_id(issue_certificate_row.id)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_certificate_by_batch():
     """
     批量删除
@@ -316,6 +403,7 @@ def delete_certificate_by_batch():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def renew_issue_certificate_by_id():
     """
     手动续期SSL证书
@@ -325,11 +413,19 @@ def renew_issue_certificate_by_id():
 
     issue_certificate_id = request.json['issue_certificate_id']
 
-    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+    # check data
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     issue_certificate_service.renew_certificate_row(issue_certificate_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_allow_commands():
     """
     命令白名单
@@ -338,14 +434,26 @@ def get_allow_commands():
     return fabric_util.allow_commands
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def notify_web_hook():
     """
     用户调用webhook
     :return:
     """
+    current_user_id = g.user_id
+
     issue_certificate_id = request.json['issue_certificate_id']
     url = request.json['url']
     headers = request.json.get('headers')
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     ret = issue_certificate_service.deploy_ssl_by_web_hook(
         issue_certificate_id=issue_certificate_id,
@@ -371,14 +479,151 @@ def notify_web_hook():
     return ret
 
 
+@auth_service.permission(role=RoleEnum.USER)
+def deploy_cert_to_oss():
+    """
+    部署证书到阿里云oss
+    :return:
+    """
+    current_user_id = g.user_id
+
+    issue_certificate_id = request.json['issue_certificate_id']
+    dns_id = request.json['dns_id']
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
+
+    ret = issue_certificate_service.deploy_cert_to_oss(
+        issue_certificate_id=issue_certificate_id,
+        dns_id=dns_id,
+    )
+
+    # 更新验证信息
+    IssueCertificateModel.update(
+        deploy_type_id=SSLDeployTypeEnum.OSS,
+        deploy_host_id=dns_id,
+        ssl_deploy_status=DeployStatusEnum.SUCCESS
+    ).where(
+        IssueCertificateModel.id == issue_certificate_id
+    ).execute()
+
+    # 验证成功后, check_auto_renew
+    issue_certificate_service.check_auto_renew(
+        issue_certificate_id=issue_certificate_id
+    )
+
+    return ret
+
+
+@auth_service.permission(role=RoleEnum.USER)
+def deploy_cert_to_cdn():
+    """
+    部署证书到阿里云cdn
+    :return:
+    """
+    current_user_id = g.user_id
+
+    issue_certificate_id = request.json['issue_certificate_id']
+    dns_id = request.json['dns_id']
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
+
+    ret = issue_certificate_service.deploy_cert_to_cdn(
+        issue_certificate_id=issue_certificate_id,
+        dns_id=dns_id,
+    )
+
+    # 更新验证信息
+    IssueCertificateModel.update(
+        deploy_type_id=SSLDeployTypeEnum.CDN,
+        deploy_host_id=dns_id,
+        ssl_deploy_status=DeployStatusEnum.SUCCESS
+    ).where(
+        IssueCertificateModel.id == issue_certificate_id
+    ).execute()
+
+    # 验证成功后, check_auto_renew
+    issue_certificate_service.check_auto_renew(
+        issue_certificate_id=issue_certificate_id
+    )
+
+    return ret
+
+
+@auth_service.permission(role=RoleEnum.USER)
+def deploy_cert_to_dcdn():
+    """
+    部署证书到阿里云dcdn
+    :return:
+    """
+    current_user_id = g.user_id
+
+    issue_certificate_id = request.json['issue_certificate_id']
+    dns_id = request.json['dns_id']
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
+
+    ret = issue_certificate_service.deploy_cert_to_dcdn(
+        issue_certificate_id=issue_certificate_id,
+        dns_id=dns_id,
+    )
+
+    # 更新验证信息
+    IssueCertificateModel.update(
+        deploy_type_id=SSLDeployTypeEnum.DCDN,
+        deploy_host_id=dns_id,
+        ssl_deploy_status=DeployStatusEnum.SUCCESS
+    ).where(
+        IssueCertificateModel.id == issue_certificate_id
+    ).execute()
+
+    # 验证成功后, check_auto_renew
+    issue_certificate_service.check_auto_renew(
+        issue_certificate_id=issue_certificate_id
+    )
+
+    return ret
+
+
+@auth_service.permission(role=RoleEnum.USER)
 def add_dns_domain_record():
     """
     添加dns记录
     :return:
     """
+    current_user_id = g.user_id
+
     dns_id = request.json['dns_id']
     issue_certificate_id = request.json['issue_certificate_id']
-    print(dns_id, ' ', issue_certificate_id)
+
+    # data check
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id,
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     # 添加txt记录
     issue_certificate_service.add_dns_domain_record(
@@ -396,16 +641,25 @@ def add_dns_domain_record():
     ).execute()
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_row_auto_renew():
     """
     修改自动更新字段
     :return:
     """
+    current_user_id = g.user_id
 
     issue_certificate_id = request.json['issue_certificate_id']
     is_auto_renew = request.json['is_auto_renew']
 
-    issue_certificate_row = IssueCertificateModel.get_by_id(issue_certificate_id)
+    # check data
+    issue_certificate_row = IssueCertificateModel.select().where(
+        IssueCertificateModel.id == issue_certificate_id,
+        IssueCertificateModel.user_id == current_user_id
+    ).first()
+
+    if not issue_certificate_row:
+        raise DataNotFoundAppException()
 
     if issue_certificate_row and issue_certificate_row.can_auto_renew:
         # 更新验证信息
@@ -418,6 +672,7 @@ def update_row_auto_renew():
         raise AppException("不支持自动续期")
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_issue_certificate_options():
     """
     获取常量

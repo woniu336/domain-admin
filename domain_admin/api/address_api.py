@@ -7,12 +7,14 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from flask import request, g
 from playhouse.shortcuts import model_to_dict
 
+from domain_admin.enums.role_enum import RoleEnum
 from domain_admin.model.address_model import AddressModel
 from domain_admin.model.domain_model import DomainModel
-from domain_admin.service import domain_service
-from domain_admin.utils.flask_ext.app_exception import AppException
+from domain_admin.service import domain_service, auth_service
+from domain_admin.utils.flask_ext.app_exception import AppException, DataNotFoundAppException, ForbiddenAppException
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_address_list_by_domain_id():
     """
     通过域名获取关联的主机地址列表
@@ -25,6 +27,15 @@ def get_address_list_by_domain_id():
     domain_id = request.json['domain_id']
     page = request.json.get('page', 1)
     size = request.json.get('size', 10)
+
+    # check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise ForbiddenAppException()
 
     query = AddressModel.select().where(
         AddressModel.domain_id == domain_id,
@@ -55,6 +66,7 @@ def get_address_list_by_domain_id():
     }
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def add_address():
     """
     添加主机地址
@@ -72,7 +84,14 @@ def add_address():
     # ssl_auto_update = request.json.get('ssl_auto_update', True)
     # ssl_expire_monitor = request.json.get('ssl_expire_monitor', True)
 
-    domain_row = DomainModel.get_by_id(domain_id)
+    # check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise ForbiddenAppException()
 
     data = {
         'domain_id': domain_id,
@@ -93,6 +112,7 @@ def add_address():
         domain_service.sync_address_info_to_domain_info(domain_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_address_by_id():
     """
     删除主机地址
@@ -107,14 +127,23 @@ def delete_address_by_id():
     # update to cert
     address_row = AddressModel.get_by_id(address_id)
 
+    # check
+    domain_row = DomainModel.select().where(
+        DomainModel.id == address_row.domain_id,
+        DomainModel.user_id == current_user_id
+    ).first()
+
+    if not domain_row:
+        raise ForbiddenAppException()
+
     AddressModel.delete().where(
         AddressModel.id == address_id
     ).execute()
 
-    domain_row = DomainModel.get_by_id(address_row.domain_id)
     domain_service.sync_address_info_to_domain_info(domain_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def delete_address_by_ids():
     """
     批量删除主机地址
@@ -127,7 +156,9 @@ def delete_address_by_ids():
     address_ids = request.json['address_ids']
 
     # update to cert
-    address_rows = AddressModel.select(AddressModel.domain_id).where(
+    address_rows = AddressModel.select(
+        AddressModel.domain_id
+    ).where(
         AddressModel.id.in_(address_ids)
     )
 
@@ -138,13 +169,15 @@ def delete_address_by_ids():
     domain_ids = [row.domain_id for row in address_rows]
 
     domain_rows = DomainModel.select().where(
-        DomainModel.id.in_(domain_ids)
+        DomainModel.id.in_(domain_ids),
+        DomainModel.user_id == current_user_id
     )
 
     for domain_row in domain_rows:
         domain_service.sync_address_info_to_domain_info(domain_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def get_address_by_id():
     """
     获取主机地址
@@ -159,6 +192,7 @@ def get_address_by_id():
     return AddressModel.get_by_id(address_id)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_address_by_id():
     """
     更新主机地址
@@ -198,6 +232,7 @@ def update_address_by_id():
         domain_service.sync_address_info_to_domain_info(domain_row)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_address_list_info_by_domain_id():
     """
     更新主机地址信息
@@ -217,6 +252,7 @@ def update_address_list_info_by_domain_id():
         raise AppException(err)
 
 
+@auth_service.permission(role=RoleEnum.USER)
 def update_address_row_info_by_id():
     """
     更新主机地址信息
