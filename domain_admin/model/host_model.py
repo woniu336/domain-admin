@@ -40,7 +40,7 @@ class HostModel(BaseModel):
 
     password = CharField(default=None, null=True)
     
-    # DNS账号id @since v1.6.xx
+    # DNS账号id @since v1.6.74
     dns_id = IntegerField(default=0)
 
     # 创建时间
