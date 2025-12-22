@@ -1,3 +1,8 @@
+- v1.6.74(2025-12-22)
+    - 增加升级脚本 for #211
+    - feat: implement dns-host association and auto-renew result tracking (#211)
+    - Update CMD to bind to IPv6 address (#210)
+
 - v1.6.73(2025-10-19)
     - fix
 
